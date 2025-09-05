@@ -1,0 +1,372 @@
+/* ===== Dispatch System — FULL SCRIPT (READY + UNDERGROSS) ===== */
+/* eslint-disable no-unused-vars */
+
+/************** READY CONFIG **************/
+const TEAMS = ['Team 1','Team 2','Team 3','Team 4','Team 5'];
+const DATA_START_ROW = 3; // данные начинаются с этой строки
+
+// оттенки «красный ready»
+const REDS = new Set([
+  '#ff0000','#ff5b5b','#ff6666','#f44336','#ea4335','#d32f2f','#e06666','#ea9999'
+]);
+
+// недельные блоки: AK..AR — 7 дней; AS — WEEK; AU — NOTES; шаг до следующего блока = 12
+const FIRST_BLOCK_START = 'AK';
+const BLOCK_STEP = 12;   // AK..AS, AW..BE, BI..BQ, ...
+const DAYS_IN_WEEK = 7;  // AK..AR (7 дней)
+
+/************** UNDERGROSS CONFIG **************/
+const UG_DATA_START_ROW = 3;
+const RANK_COLS = ['H','I','J','K','U','AG','AS']; // история (AS — последняя неделя)
+const WEEK_BLOCK_WIDTH = 12;                        // шаг блоков
+const WEEK_DAYS_LEN = 7;                            // AK..AR
+const WEEK_GROSS_OFFSET = 8;                        // WEEK = start + 8 (AS = AK+8)
+const UG_THRESHOLD = 7000;                          // фильтр < 7000 по AS
+const TEAM_NAME_PATTERN = /^Team\s+\d+/i;           // Team 1..5
+
+/************** MENU **************/
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('Dispatch')
+    .addItem('READY (FAST, dynamic week block)', 'buildReadyDynamicFast')
+    .addItem('Underperformed (auto last week)', 'buildUnderGrossReports')
+    .addToUi();
+}
+
+/************** READY: MAIN **************/
+function buildReadyDynamicFast() {
+  const ss = SpreadsheetApp.getActive();
+  const tz = ss.getSpreadsheetTimeZone();
+  const stamp = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const outName = `READY ${stamp}`;
+
+  let out = ss.getSheetByName(outName);
+  if (!out) out = ss.insertSheet(outName);
+  out.clear({contentsOnly:true});
+
+  // шапка — с первого листа, где найдётся активный блок
+  let headerSet = false;
+  for (const t of TEAMS) {
+    const sh = ss.getSheetByName(t);
+    if (!sh) continue;
+    const block = findActiveWeekBlock_(sh); // {startCol, weekCol, notesCol, hdrRow}
+    if (!block) continue;
+    try {
+      // E1:F1 -> A1:B1
+      sh.getRange(1, colLetterToIndex_('E'), 1, 2)
+        .copyTo(out.getRange(1, 1, 1, 2), {contentsOnly:false});
+      // даты (7 дней) -> C1:I1
+      sh.getRange(block.hdrRow, block.startCol, 1, DAYS_IN_WEEK)
+        .copyTo(out.getRange(1, 3, 1, DAYS_IN_WEEK), {contentsOnly:false});
+      // WEEK -> J1
+      sh.getRange(1, block.weekCol, 1, 1)
+        .copyTo(out.getRange(1, 10, 1, 1), {contentsOnly:false});
+      // NOTES -> K1
+      sh.getRange(1, block.notesCol, 1, 1)
+        .copyTo(out.getRange(1, 11, 1, 1), {contentsOnly:false});
+      headerSet = true;
+      break;
+    } catch (e) {}
+  }
+  if (!headerSet) {
+    out.getRange('A1').setValue('No active week block found.');
+    return;
+  }
+
+  // кандидаты
+  const candidates = [];
+  let orderSeq = 0;
+
+  for (const name of TEAMS) {
+    const sh = ss.getSheetByName(name);
+    if (!sh) continue;
+    const block = findActiveWeekBlock_(sh);
+    if (!block) continue;
+
+    const lastRow = sh.getLastRow();
+    if (lastRow < DATA_START_ROW) continue;
+
+    const numRows = lastRow - DATA_START_ROW + 1;
+    const daysVals = sh.getRange(DATA_START_ROW, block.startCol, numRows, DAYS_IN_WEEK).getValues();
+    const daysBgs  = sh.getRange(DATA_START_ROW, block.startCol, numRows, DAYS_IN_WEEK).getBackgrounds();
+
+    for (let i = 0; i < numRows; i++) {
+      const vals = daysVals[i];
+      const bgs  = daysBgs[i];
+      let hasAny = false, count = 0, maxRun = 0, run = 0;
+
+      for (let d = 0; d < DAYS_IN_WEEK; d++) {
+        const v  = String(vals[d] ?? '').trim().toLowerCase();
+        const bg = String(bgs[d]  ?? '').toLowerCase();
+        const isRedReady = (v === 'ready') && (REDS.has(bg) || isRedLoose_(bg));
+        if (isRedReady) { hasAny = true; count++; run++; if (run > maxRun) maxRun = run; }
+        else { run = 0; }
+      }
+      if (!hasAny) continue;
+
+      const row = DATA_START_ROW + i;
+      const score = (count >= 3 ? 2 : 0) + (maxRun >= 2 ? 1 : 0);
+      candidates.push({sheet: sh, row, count, maxRun, score, order: orderSeq++, block});
+    }
+  }
+
+  if (candidates.length === 0) {
+    out.getRange('A2').setValue('No RED READY found in active week block.');
+    autosize_(out, 11);
+    return;
+  }
+
+  candidates.sort((a,b) => b.score - a.score || b.count - a.count || a.order - b.order);
+
+  let rOut = 2;
+  for (const c of candidates) {
+    const sh = c.sheet;
+    const b  = c.block;
+    safeCopy_(sh, c.row, colLetterToIndex_('E'), 1, 2, out, rOut, 1);        // E:F -> A:B
+    safeCopy_(sh, c.row, b.startCol, 1, DAYS_IN_WEEK, out, rOut, 3);         // дни -> C:I
+    safeCopy_(sh, c.row, b.weekCol, 1, 1, out, rOut, 10);                    // WEEK -> J
+    safeCopy_(sh, c.row, b.notesCol, 1, 1, out, rOut, 11);                   // NOTES -> K
+    rOut++;
+  }
+
+  if (rOut > 2) {
+    out.getRange(2, 10, rOut - 2, 1).setValues(out.getRange(2, 10, rOut - 2, 1).getDisplayValues());
+    out.getRange(2, 11, rOut - 2, 1).setValues(out.getRange(2, 11, rOut - 2, 1).getDisplayValues());
+  }
+  autosize_(out, 11);
+}
+
+/************** UNDERGROSS: MAIN (history w/o AS → days AK–AQ → AS) **************/
+function buildUnderGrossReports() {
+  const ss = SpreadsheetApp.getActive();
+  const tz = ss.getSpreadsheetTimeZone();
+  const stamp = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+
+  const teamSheets = ss.getSheets().filter(sh => TEAM_NAME_PATTERN.test(sh.getName()));
+  if (teamSheets.length === 0) {
+    SpreadsheetApp.getUi().alert('Не нашёл листов "Team …". Проверь названия.');
+    return;
+  }
+
+  for (const sh of teamSheets) {
+    try {
+      const lastRow = sh.getLastRow();
+      const lastCol = sh.getLastColumn();
+      if (lastRow < UG_DATA_START_ROW) continue;
+
+      const block = findLastWeekBlock_(sh, lastRow, lastCol);
+      if (!block) {
+        makeOutSheet_(ss, sh.getName(), stamp)
+          .getRange('A2').setValue('Не найден непустой недельный блок (AK..AS с шагом 12).');
+        continue;
+      }
+
+      const {daysStartCol} = block; // AK..AS
+      const numRows = lastRow - UG_DATA_START_ROW + 1;
+
+      // история H..AS
+      const rankStart = colLetterToIndex_('H');
+      const rankEnd   = colLetterToIndex_('AS');
+      const rankOffsets = RANK_COLS.map(c => colLetterToIndex_(c) - rankStart);
+      const rankAsOff  = rankOffsets[rankOffsets.length - 1]; // AS offset
+
+      const valsEF    = sh.getRange(UG_DATA_START_ROW, colLetterToIndex_('E'),  numRows, 2).getDisplayValues();
+      const bgsEF     = sh.getRange(UG_DATA_START_ROW, colLetterToIndex_('E'),  numRows, 2).getBackgrounds();
+      const valsRank  = sh.getRange(UG_DATA_START_ROW, rankStart,               numRows, rankEnd - rankStart + 1).getDisplayValues();
+      const bgsRank   = sh.getRange(UG_DATA_START_ROW, rankStart,               numRows, rankEnd - rankStart + 1).getBackgrounds();
+
+      // выбранный недельный блок AK..AS (дни AK..AQ отдельно)
+      const valsWeekFull  = sh.getRange(UG_DATA_START_ROW, daysStartCol,        numRows, WEEK_DAYS_LEN + 1).getDisplayValues();
+      const bgsWeekFull   = sh.getRange(UG_DATA_START_ROW, daysStartCol,        numRows, WEEK_DAYS_LEN + 1).getBackgrounds();
+
+      // фильтр по AS
+      const rows = [];
+      for (let i = 0; i < numRows; i++) {
+        const asVal = toNumber_(valsRank[i][rankAsOff]);
+        if (asVal === null || asVal >= UG_THRESHOLD) continue;
+
+        let belowCnt = 0;
+        for (const off of rankOffsets) {
+          const v = toNumber_(valsRank[i][off]);
+          if (v !== null && v < UG_THRESHOLD) belowCnt++;
+        }
+        rows.push({i, belowCnt, orig: i});
+      }
+
+      rows.sort((a,b) => (b.belowCnt - a.belowCnt) || (a.orig - b.orig));
+
+      const out = makeOutSheet_(ss, sh.getName(), stamp);
+      out.clear({contentsOnly:true});
+
+      // ---- ШАПКА ----
+      // A1:B1 — Dispatcher/Drivers
+      sh.getRange(1, colLetterToIndex_('E'), 1, 2).copyTo(out.getRange(1,1,1,2), {contentsOnly:false});
+
+      // История БЕЗ AS -> сразу после B
+      const HIST_NO_AS = RANK_COLS.slice(0, -1); // H,I,J,K,U,AG
+      for (let j = 0; j < HIST_NO_AS.length; j++) {
+        const srcColIndex = colLetterToIndex_(HIST_NO_AS[j]);
+        sh.getRange(1, srcColIndex, 1, 1).copyTo(out.getRange(1, 3 + j, 1, 1), {contentsOnly:false});
+      }
+
+      // Дни выбранного блока (AK..AQ) -> после истории без AS
+      const daysHeaderStart = 3 + HIST_NO_AS.length;
+      sh.getRange(1, daysStartCol, 1, WEEK_DAYS_LEN)
+        .copyTo(out.getRange(1, daysHeaderStart, 1, WEEK_DAYS_LEN), {contentsOnly:false});
+
+      // AS (последняя неделя) -> последней колонкой
+      const asHeaderCol = daysHeaderStart + WEEK_DAYS_LEN;
+      sh.getRange(1, colLetterToIndex_('AS'), 1, 1)
+        .copyTo(out.getRange(1, asHeaderCol, 1, 1), {contentsOnly:false});
+
+      // жирная шапка
+      out.getRange(1,1,1, 2 + HIST_NO_AS.length + WEEK_DAYS_LEN + 1).setFontWeight('bold');
+
+      // ---- ДАННЫЕ ----
+      if (rows.length === 0) {
+        out.getRange('A2').setValue('Нет водителей с AS < 7000.');
+      } else {
+        const outVals = [];
+        const outBgs  = [];
+        const histNoAsOffsets = HIST_NO_AS.map(c => colLetterToIndex_(c) - rankStart);
+        for (const r of rows) {
+          const i = r.i;
+          const histNoAsVals = histNoAsOffsets.map(off => valsRank[i][off]); // H,I,J,K,U,AG
+          const histNoAsBgs  = histNoAsOffsets.map(off => bgsRank[i][off]);
+          const weekVals = valsWeekFull[i].slice(0, WEEK_DAYS_LEN);           // AK..AQ
+          const weekBgs  = bgsWeekFull[i].slice(0, WEEK_DAYS_LEN);
+          const asVal    = valsRank[i][rankAsOff];                             // AS
+          const asBg     = bgsRank[i][rankAsOff];
+
+          outVals.push([...valsEF[i], ...histNoAsVals, ...weekVals, asVal]);
+          outBgs.push([...bgsEF[i],  ...histNoAsBgs,  ...weekBgs,  asBg]);
+        }
+        const R = outVals.length, C = outVals[0].length;
+        out.getRange(2,1,R,C).setValues(outVals);
+        out.getRange(2,1,R,C).setBackgrounds(outBgs);
+      }
+
+      const totalCols = 2 + (RANK_COLS.length - 1) + WEEK_DAYS_LEN + 1; // history(no AS) + days + AS
+      for (let c = 1; c <= totalCols; c++) out.autoResizeColumn(c);
+
+      out.getRange('A2').setNote(`Selected days: ${colIndexToLetter_(daysStartCol)}..${colIndexToLetter_(daysStartCol + WEEK_DAYS_LEN - 1)}`);
+
+    } catch (err) {
+      const out = makeOutSheet_(ss, sh.getName(), stamp);
+      out.getRange('A2').setValue('Ошибка: ' + (err && err.message ? err.message : err));
+    }
+  }
+}
+
+/* ===== helpers ===== */
+
+// активный недельный блок на листе (самый правый)
+function findActiveWeekBlock_(sh) {
+  const maxCol = sh.getMaxColumns();
+  let start = colLetterToIndex_(FIRST_BLOCK_START);
+  let found = null;
+
+  while (start + 10 <= maxCol) {
+    const hdrRow = detectDateHeaderRowInBlock_(sh, start);
+    if (hdrRow) {
+      found = {
+        startCol: start,          // AK, AW, BI, ...
+        weekCol:  start + 8,      // AS, BE, BQ, ...
+        notesCol: start + 10,     // AU, BG, BU, ...
+        hdrRow
+      };
+    }
+    start += BLOCK_STEP;
+  }
+  return found;
+}
+
+// ищем последний непустой недельный блок (AK..AS, AW..BE, ...)
+function findLastWeekBlock_(sh, lastRow, lastCol) {
+  const firstDays = colLetterToIndex_('AK');
+  let best = null;
+
+  for (let start = firstDays; start <= lastCol; start += WEEK_BLOCK_WIDTH) {
+    const daysStartCol = start;                           // AK, AW, BI, …
+    const weekGrossCol = start + WEEK_GROSS_OFFSET;       // AS, BE, BQ, …
+    const width = WEEK_DAYS_LEN + 1;                      // AK..AS
+
+    if (weekGrossCol > lastCol) break;
+
+    const colVals = sh.getRange(UG_DATA_START_ROW, weekGrossCol, lastRow - UG_DATA_START_ROW + 1, 1)
+      .getDisplayValues()
+      .map(r => r[0])
+      .filter(v => v !== null && String(v).trim() !== '');
+
+    if (colVals.length > 0) best = {daysStartCol, weekGrossCol, width};
+  }
+  return best;
+}
+
+// определяем строку шапки с датами для блока (start..start+6)
+function detectDateHeaderRowInBlock_(sh, startCol) {
+  const candidates = [1,2,3];
+  for (const r of candidates) {
+    const vals = sh.getRange(r, startCol, 1, DAYS_IN_WEEK).getDisplayValues()[0];
+    const ok = vals.every(v => {
+      const s = String(v || '').trim().toLowerCase();
+      if (!s) return false;
+      if (s === 'ready' || s === 'enroute' || s === 'break') return false;
+      return /[-/]/.test(s) || /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(s);
+    });
+    if (ok) return r;
+  }
+  return null;
+}
+
+// utils
+function safeCopy_(srcSheet, srcRow, srcCol, numRows, numCols, dstSheet, dstRow, dstCol) {
+  try {
+    srcSheet.getRange(srcRow, srcCol, numRows, numCols)
+            .copyTo(dstSheet.getRange(dstRow, dstCol, numRows, numCols), {contentsOnly:false});
+  } catch (_) {}
+}
+
+function isRedLoose_(hex) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return false;
+  const r = parseInt(hex.slice(1,3),16),
+        g = parseInt(hex.slice(3,5),16),
+        b = parseInt(hex.slice(5,7),16);
+  return r >= 200 && g <= 90 && b <= 90;
+}
+
+function colLetterToIndex_(letter) {
+  let n = 0;
+  for (let i=0;i<letter.length;i++) n = n*26 + (letter.charCodeAt(i)-64);
+  return n;
+}
+
+function colIndexToLetter_(index) {
+  let result = '';
+  while (index > 0) {
+    index--;
+    result = String.fromCharCode(65 + (index % 26)) + result;
+    index = Math.floor(index / 26);
+  }
+  return result;
+}
+
+function autosize_(sheet, nCols) {
+  for (let c = 1; c <= nCols; c++) sheet.autoResizeColumn(c);
+}
+
+function toNumber_(v) {
+  if (typeof v === 'number') return v;
+  if (v === null || v === undefined) return null;
+  const s = String(v).replace(/[^0-9.\-]/g,'').trim();
+  if (!s) return null;
+  const num = parseFloat(s);
+  return Number.isFinite(num) ? num : null;
+}
+
+function makeOutSheet_(ss, teamName, stamp) {
+  const name = `UG ${teamName} ${stamp}`;
+  let sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+  return sh;
+}
