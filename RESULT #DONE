@@ -30,6 +30,8 @@ function onOpen() {
     .createMenu('Dispatch')
     .addItem('READY (FAST, dynamic week block)', 'buildReadyDynamicFast')
     .addItem('Underperformed (auto last week)', 'buildUnderGrossReports')
+    .addSeparator()
+    .addItem('🧨 RED BUTTON: Clean extra reports', 'redButtonCleanup')
     .addToUi();
 }
 
@@ -157,7 +159,7 @@ function buildUnderGrossReports() {
       const block = findLastWeekBlock_(sh, lastRow, lastCol);
       if (!block) {
         makeOutSheet_(ss, sh.getName(), stamp)
-          .getRange('A2').setValue('Не найден непустой недельный блок (AK..AS с шагом 12).');
+          .getRange(('A2')).setValue('Не найден непустой недельный блок (AK..AS с шагом 12).');
         continue;
       }
 
@@ -199,27 +201,18 @@ function buildUnderGrossReports() {
       out.clear({contentsOnly:true});
 
       // ---- ШАПКА ----
-      // A1:B1 — Dispatcher/Drivers
       sh.getRange(1, colLetterToIndex_('E'), 1, 2).copyTo(out.getRange(1,1,1,2), {contentsOnly:false});
-
-      // История БЕЗ AS -> сразу после B
       const HIST_NO_AS = RANK_COLS.slice(0, -1); // H,I,J,K,U,AG
       for (let j = 0; j < HIST_NO_AS.length; j++) {
         const srcColIndex = colLetterToIndex_(HIST_NO_AS[j]);
         sh.getRange(1, srcColIndex, 1, 1).copyTo(out.getRange(1, 3 + j, 1, 1), {contentsOnly:false});
       }
-
-      // Дни выбранного блока (AK..AQ) -> после истории без AS
       const daysHeaderStart = 3 + HIST_NO_AS.length;
       sh.getRange(1, daysStartCol, 1, WEEK_DAYS_LEN)
         .copyTo(out.getRange(1, daysHeaderStart, 1, WEEK_DAYS_LEN), {contentsOnly:false});
-
-      // AS (последняя неделя) -> последней колонкой
       const asHeaderCol = daysHeaderStart + WEEK_DAYS_LEN;
       sh.getRange(1, colLetterToIndex_('AS'), 1, 1)
         .copyTo(out.getRange(1, asHeaderCol, 1, 1), {contentsOnly:false});
-
-      // жирная шапка
       out.getRange(1,1,1, 2 + HIST_NO_AS.length + WEEK_DAYS_LEN + 1).setFontWeight('bold');
 
       // ---- ДАННЫЕ ----
@@ -231,13 +224,12 @@ function buildUnderGrossReports() {
         const histNoAsOffsets = HIST_NO_AS.map(c => colLetterToIndex_(c) - rankStart);
         for (const r of rows) {
           const i = r.i;
-          const histNoAsVals = histNoAsOffsets.map(off => valsRank[i][off]); // H,I,J,K,U,AG
+          const histNoAsVals = histNoAsOffsets.map(off => valsRank[i][off]);
           const histNoAsBgs  = histNoAsOffsets.map(off => bgsRank[i][off]);
-          const weekVals = valsWeekFull[i].slice(0, WEEK_DAYS_LEN);           // AK..AQ
+          const weekVals = valsWeekFull[i].slice(0, WEEK_DAYS_LEN);
           const weekBgs  = bgsWeekFull[i].slice(0, WEEK_DAYS_LEN);
-          const asVal    = valsRank[i][rankAsOff];                             // AS
+          const asVal    = valsRank[i][rankAsOff];
           const asBg     = bgsRank[i][rankAsOff];
-
           outVals.push([...valsEF[i], ...histNoAsVals, ...weekVals, asVal]);
           outBgs.push([...bgsEF[i],  ...histNoAsBgs,  ...weekBgs,  asBg]);
         }
@@ -246,21 +238,19 @@ function buildUnderGrossReports() {
         out.getRange(2,1,R,C).setBackgrounds(outBgs);
       }
 
-      const totalCols = 2 + (RANK_COLS.length - 1) + WEEK_DAYS_LEN + 1; // history(no AS) + days + AS
+      const totalCols = 2 + (RANK_COLS.length - 1) + WEEK_DAYS_LEN + 1;
       for (let c = 1; c <= totalCols; c++) out.autoResizeColumn(c);
 
-      // ПРИМЕЧАНИЕ о выбранных днях
       out.getRange('A2').setNote(`Selected days: ${colIndexToLetter_(daysStartCol)}..${colIndexToLetter_(daysStartCol + WEEK_DAYS_LEN - 1)}`);
 
-      // ===== BORDERS: сетка по всему отчёту (шапка + данные) =====
-      const usedRows = Math.max(1, out.getLastRow());          // минимум шапка
-      const usedCols = Math.max(1, out.getLastColumn());       // минимум 1
+      // ===== BORDERS (black, medium) =====
+      const usedRows = Math.max(1, out.getLastRow());
+      const usedCols = Math.max(1, out.getLastColumn());
       out.getRange(1, 1, usedRows, usedCols).setBorder(
-  true, true, true, true, true, true,
-  "black",          // цвет границы
-  SpreadsheetApp.BorderStyle.SOLID_MEDIUM // толщина (есть SOLID, SOLID_MEDIUM, SOLID_THICK, DASHED, DOTTED)
-);
-
+        true, true, true, true, true, true,
+        "black",
+        SpreadsheetApp.BorderStyle.SOLID_MEDIUM
+      );
 
     } catch (err) {
       const out = makeOutSheet_(ss, sh.getName(), stamp);
@@ -269,52 +259,68 @@ function buildUnderGrossReports() {
   }
 }
 
-/* ===== helpers ===== */
+/************** RED BUTTON: delete all sheets except Team 1..5 and READY* **************/
+function redButtonCleanup() {
+  const ss = SpreadsheetApp.getActive();
+  const ui = SpreadsheetApp.getUi();
+  const resp = ui.alert(
+    'RED BUTTON',
+    'Удалить ВСЕ листы, кроме Team 1..5 и листов, начинающихся на "READY"? Это действие необратимо.',
+    ui.ButtonSet.YES_NO
+  );
+  if (resp !== ui.Button.YES) return;
 
-// активный недельный блок на листе (самый правый)
+  const keepTeam = new Set(['Team 1','Team 2','Team 3','Team 4','Team 5']);
+  const sheets = ss.getSheets();
+
+  // Соберём список на удаление
+  const toDelete = [];
+  for (const sh of sheets) {
+    const name = sh.getName();
+    const isTeamKeep = keepTeam.has(name);
+    const isReadyKeep = /^READY\b/i.test(name); // READY или READY 2025-...
+    if (!isTeamKeep && !isReadyKeep) {
+      toDelete.push(sh);
+    }
+  }
+
+  // Удаляем, избегая ситуации "последний лист"
+  for (const sh of toDelete) {
+    if (ss.getSheets().length <= 1) break; // safety
+    ss.deleteSheet(sh);
+  }
+
+  ui.alert(`Готово. Удалено листов: ${toDelete.length}. Оставлены только Team 1..5 и READY*.`);
+}
+
+/* ===== helpers ===== */
 function findActiveWeekBlock_(sh) {
   const maxCol = sh.getMaxColumns();
   let start = colLetterToIndex_(FIRST_BLOCK_START);
   let found = null;
-
   while (start + 10 <= maxCol) {
     const hdrRow = detectDateHeaderRowInBlock_(sh, start);
     if (hdrRow) {
-      found = {
-        startCol: start,          // AK, AW, BI, ...
-        weekCol:  start + 8,      // AS, BE, BQ, ...
-        notesCol: start + 10,     // AU, BG, BU, ...
-        hdrRow
-      };
+      found = { startCol: start, weekCol: start + 8, notesCol: start + 10, hdrRow };
     }
     start += BLOCK_STEP;
   }
   return found;
 }
 
-// ищем последний непустой недельный блок (AK..AS, AW..BE, ...)
 function findLastWeekBlock_(sh, lastRow, lastCol) {
   const firstDays = colLetterToIndex_('AK');
   let best = null;
-
   for (let start = firstDays; start <= lastCol; start += WEEK_BLOCK_WIDTH) {
-    const daysStartCol = start;                           // AK, AW, BI, …
-    const weekGrossCol = start + WEEK_GROSS_OFFSET;       // AS, BE, BQ, …
-    const width = WEEK_DAYS_LEN + 1;                      // AK..AS
-
+    const weekGrossCol = start + WEEK_GROSS_OFFSET;
     if (weekGrossCol > lastCol) break;
-
     const colVals = sh.getRange(UG_DATA_START_ROW, weekGrossCol, lastRow - UG_DATA_START_ROW + 1, 1)
-      .getDisplayValues()
-      .map(r => r[0])
-      .filter(v => v !== null && String(v).trim() !== '');
-
-    if (colVals.length > 0) best = {daysStartCol, weekGrossCol, width};
+      .getDisplayValues().map(r => r[0]).filter(v => v && String(v).trim() !== '');
+    if (colVals.length > 0) best = {daysStartCol: start, weekGrossCol, width: WEEK_DAYS_LEN + 1};
   }
   return best;
 }
 
-// определяем строку шапки с датами для блока (start..start+6)
 function detectDateHeaderRowInBlock_(sh, startCol) {
   const candidates = [1,2,3];
   for (const r of candidates) {
@@ -330,7 +336,6 @@ function detectDateHeaderRowInBlock_(sh, startCol) {
   return null;
 }
 
-// utils
 function safeCopy_(srcSheet, srcRow, srcCol, numRows, numCols, dstSheet, dstRow, dstCol) {
   try {
     srcSheet.getRange(srcRow, srcCol, numRows, numCols)
