@@ -1,0 +1,1322 @@
+/* ===== READY Custom Date Range - NEW LOGIC ===== */
+/* Четкая структура с явным описанием всех колонок */
+
+/************** TABLE STRUCTURE **************/
+const TABLE_STRUCTURE = {
+  // Базовые колонки (всегда в одном месте)
+  base: {
+    rpm: 'A',
+    gross: 'B',
+    pickyOrNot: 'C',
+    weakStrong: 'D',
+    dispatcher: 'E',
+    driver: 'F'
+  },
+
+  // Разделители (пустые колонки)
+  separators: {
+    afterDrivers: 'G',      // после F
+    afterWeek34: 'L',       // после WEEK 34
+    afterWeek35: 'T',       // после WEEK 35 дней
+    afterWeek35Notes: 'V',  // после WEEK 35 NOTES
+    afterWeek35Block: 'X',  // после всего блока WEEK 35
+    // и так далее для каждого блока...
+  },
+
+  // История недель (одиночные колонки)
+  historyWeeks: {
+    week31: 'H',
+    week32: 'I',
+    week33: 'J',
+    week34: 'K'
+  },
+
+  // Полные недельные блоки (7 дней + WEEK Gross + разделитель + NOTES)
+  weekBlocks: {
+    week35: {
+      day1: 'M',
+      day2: 'N',
+      day3: 'O',
+      day4: 'P',
+      day5: 'Q',
+      day6: 'R',
+      day7: 'S',
+      separator: 'T',
+      weekGross: 'U',
+      separator2: 'V',
+      notes: 'W',
+      separator3: 'X'
+    },
+    week36: {
+      day1: 'Y',
+      day2: 'Z',
+      day3: 'AA',
+      day4: 'AB',
+      day5: 'AC',
+      day6: 'AD',
+      day7: 'AE',
+      separator: 'AF',
+      weekGross: 'AG',
+      separator2: 'AH',
+      notes: 'AI',
+      separator3: 'AJ'
+    },
+    week37: {
+      day1: 'AK',
+      day2: 'AL',
+      day3: 'AM',
+      day4: 'AN',
+      day5: 'AO',
+      day6: 'AP',
+      day7: 'AQ',
+      separator: 'AR',
+      weekGross: 'AS',
+      separator2: 'AT',
+      notes: 'AU',
+      separator3: 'AV'
+    },
+    week38: {
+      day1: 'AW',
+      day2: 'AX',
+      day3: 'AY',
+      day4: 'AZ',
+      day5: 'BA',
+      day6: 'BB',
+      day7: 'BC',
+      separator: 'BD',
+      weekGross: 'BE',
+      separator2: 'BF',
+      notes: 'BG',
+      separator3: 'BH'
+    },
+    week39: {
+      day1: 'BI',
+      day2: 'BJ',
+      day3: 'BK',
+      day4: 'BL',
+      day5: 'BM',
+      day6: 'BN',
+      day7: 'BO',
+      separator: 'BP',
+      weekGross: 'BQ',
+      separator2: 'BR',
+      notes: 'BS',
+      separator3: 'BT'
+    },
+    week40: {
+      day1: 'BU',
+      day2: 'BV',
+      day3: 'BW',
+      day4: 'BX',
+      day5: 'BY',
+      day6: 'BZ',
+      day7: 'CA',
+      separator: 'CB',
+      weekGross: 'CC',
+      separator2: 'CD',
+      notes: 'CE',
+      separator3: 'CF'
+    },
+    week41: {
+      day1: 'CG',
+      day2: 'CH',
+      day3: 'CI',
+      day4: 'CJ',
+      day5: 'CK',
+      day6: 'CL',
+      day7: 'CM',
+      separator: 'CN',
+      weekGross: 'CO',
+      separator2: 'CP',
+      notes: 'CQ',
+      separator3: 'CR'
+    }
+    // WEEK 42-50 будут добавлены позже когда создадутся
+  }
+};
+
+/************** CONFIGURATION **************/
+const CONFIG = {
+  teams: ['Team 1', 'Team 2', 'Team 3', 'Team 4', 'Team 5'],
+  dataStartRow: 2, // данные начинаются с строки 2 (строка 1 = заголовки)
+  timezone: 'America/Chicago',
+
+  // Красные цвета для READY
+  redColors: new Set([
+    '#ff0000', '#ff5b5b', '#ff6666', '#f44336', '#ea4335',
+    '#d32f2f', '#e06666', '#ea9999'
+  ]),
+
+  // Структура недельного блока (для автоматического расчета)
+  weekBlockPattern: {
+    daysCount: 7,         // 7 дней
+    stepSize: 12,         // между блоками 12 колонок
+    dayToGrossOffset: 8,  // от day1 до weekGross = 8 колонок (M -> U)
+    dayToNotesOffset: 10  // от day1 до notes = 10 колонок (M -> W)
+  }
+};
+
+/************** UTILITY FUNCTIONS **************/
+
+// Конвертация буквы колонки в индекс
+function colLetterToIndex(letter) {
+  if (!letter || typeof letter !== 'string') {
+    console.error('colLetterToIndex: invalid input:', letter);
+    return 1; // возвращаем колонку A по умолчанию
+  }
+
+  letter = letter.toUpperCase();
+  let col = 0;
+  for (let i = 0; i < letter.length; i++) {
+    col = col * 26 + (letter.charCodeAt(i) - 64);
+  }
+  return col;
+}
+
+// Конвертация индекса в букву колонки
+function colIndexToLetter(index) {
+  let result = '';
+  while (index > 0) {
+    index--;
+    result = String.fromCharCode(65 + (index % 26)) + result;
+    index = Math.floor(index / 26);
+  }
+  return result;
+}
+
+// Проверка является ли цвет красным
+function isRedColor(hexColor) {
+  const lowerColor = String(hexColor || '').toLowerCase();
+  if (CONFIG.redColors.has(lowerColor)) return true;
+
+  // RGB проверка для красных оттенков
+  if (!/^#[0-9a-fA-F]{6}$/.test(hexColor)) return false;
+  const r = parseInt(hexColor.slice(1, 3), 16);
+  const g = parseInt(hexColor.slice(3, 5), 16);
+  const b = parseInt(hexColor.slice(5, 7), 16);
+  return r >= 200 && g <= 90 && b <= 90;
+}
+
+// Получить все листы команд
+function getTeamSheets(spreadsheet) {
+  if (!spreadsheet) {
+    console.error('getTeamSheets: spreadsheet is undefined!');
+    return [];
+  }
+
+  try {
+    return spreadsheet.getSheets().filter(sheet =>
+      /^Team\s+\d+/i.test(sheet.getName())
+    );
+  } catch (e) {
+    console.error('Error in getTeamSheets:', e);
+    return [];
+  }
+}
+
+// Получить информацию о недельном блоке по номеру недели
+function getWeekBlockInfo(weekNumber) {
+  if (!weekNumber || weekNumber === undefined) {
+    console.error('getWeekBlockInfo: weekNumber is undefined or null!');
+    return null;
+  }
+
+  const weekKey = `week${weekNumber}`;
+  const block = TABLE_STRUCTURE.weekBlocks[weekKey];
+
+  if (!block) {
+    console.error(`Week ${weekNumber} (${weekKey}) not found in TABLE_STRUCTURE`);
+    console.error('Available weeks:', Object.keys(TABLE_STRUCTURE.weekBlocks));
+    return null;
+  }
+
+  // Проверяем что все необходимые поля присутствуют
+  if (!block.day1 || !block.weekGross || !block.notes) {
+    console.error(`Week ${weekNumber} has missing fields:`, block);
+    return null;
+  }
+
+  try {
+    console.log(`Processing week ${weekNumber}, block:`, JSON.stringify(block));
+
+    // Проверяем каждое поле перед конвертацией
+    const daysArray = [
+      block.day1, block.day2, block.day3, block.day4,
+      block.day5, block.day6, block.day7
+    ];
+
+    console.log(`Week ${weekNumber} days:`, daysArray);
+
+    // Находим undefined
+    const undefinedIndex = daysArray.findIndex(d => !d);
+    if (undefinedIndex !== -1) {
+      console.error(`Week ${weekNumber} has undefined day at index ${undefinedIndex}`);
+      return null;
+    }
+
+    return {
+      weekNumber: weekNumber,
+      day1Col: colLetterToIndex(block.day1),
+      weekGrossCol: colLetterToIndex(block.weekGross),
+      notesCol: colLetterToIndex(block.notes),
+      daysColumns: daysArray.map(col => colLetterToIndex(col))
+    };
+  } catch (e) {
+    console.error(`Error processing week ${weekNumber}:`, e);
+    return null;
+  }
+}
+
+// Получить все доступные недели
+function getAvailableWeeks() {
+  return Object.keys(TABLE_STRUCTURE.weekBlocks).map(key => {
+    return parseInt(key.replace('week', ''));
+  }).sort((a, b) => b - a); // от новых к старым
+}
+
+// Получить только текущую и предыдущую недели
+function getCurrentAndPreviousWeeks() {
+  const allWeeks = getAvailableWeeks();
+  console.log('All available weeks:', allWeeks);
+
+  // Берем 2 последние недели (текущая + предыдущая)
+  const result = allWeeks.slice(0, 2);
+  console.log('Current and previous weeks:', result);
+  return result;
+}
+
+/************** DATE PARSING **************/
+
+// Парсинг даты из заголовка
+function parseDateFromHeader(headerText) {
+  if (!headerText) return null;
+
+  // Извлекаем день месяца
+  const dayMatch = headerText.match(/\b(\d{1,2})\b/);
+  if (!dayMatch) return null;
+
+  const day = parseInt(dayMatch[1]);
+
+  // Определяем название дня недели
+  let dayName = 'Day';
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  for (const name of dayNames) {
+    if (headerText.toLowerCase().includes(name.toLowerCase())) {
+      dayName = name;
+      break;
+    }
+  }
+
+  // Определяем месяц
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentDay = now.getDate();
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  let monthIndex = currentMonth;
+  if (day > currentDay + 7) {
+    monthIndex = currentMonth === 0 ? 11 : currentMonth - 1;
+  } else if (day < currentDay - 7) {
+    monthIndex = currentMonth === 11 ? 0 : currentMonth + 1;
+  }
+
+  return {
+    day: day,
+    dayName: dayName,
+    monthName: monthNames[monthIndex]
+  };
+}
+
+// Найти все доступные даты во всех недельных блоках
+function findAvailableDates(spreadsheet) {
+  const teamSheets = getTeamSheets(spreadsheet);
+  const availableDates = [];
+
+  console.log('Team sheets found:', teamSheets.length);
+
+  // ТОЛЬКО текущая и предыдущая недели
+  const availableWeeks = getCurrentAndPreviousWeeks();
+  console.log('Available weeks:', availableWeeks);
+
+  // Берем первый лист команды для чтения заголовков
+  if (teamSheets.length === 0) {
+    console.error('No team sheets found!');
+    return [];
+  }
+  const sheet = teamSheets[0];
+  console.log('Using sheet:', sheet.getName());
+
+  // Получаем текущую дату по Чикаго
+  const now = new Date();
+  const chicagoTime = Utilities.formatDate(now, CONFIG.timezone, 'yyyy-MM-dd');
+  const currentDay = parseInt(chicagoTime.split('-')[2]);
+  const currentMonth = parseInt(chicagoTime.split('-')[1]);
+  console.log('Current Chicago date:', chicagoTime, 'Day:', currentDay, 'Month:', currentMonth);
+
+  // Проходим ТОЛЬКО по текущей и предыдущей неделям
+  for (const weekNumber of availableWeeks) {
+    console.log(`Processing week ${weekNumber}`);
+    const blockInfo = getWeekBlockInfo(weekNumber);
+    if (!blockInfo) {
+      console.error(`No block info for week ${weekNumber}`);
+      continue;
+    }
+    console.log(`Block info for week ${weekNumber}:`, blockInfo);
+
+    try {
+      // Читаем РЕАЛЬНЫЕ ДАТЫ из строки 1 (например: "29-Sep", "30-Sep", "1-Oct")
+      const dateVals = sheet.getRange(1, blockInfo.day1Col, 1, 7).getDisplayValues()[0];
+
+      // Парсим каждый день
+      for (let d = 0; d < 7; d++) {
+        const dateText = String(dateVals[d] || '').trim();
+        if (!dateText) continue;
+
+        // Парсим дату в формате "29-Sep" или "1-Oct"
+        const dateMatch = dateText.match(/(\d{1,2})-([A-Za-z]{3})/);
+        if (dateMatch) {
+          const day = parseInt(dateMatch[1]);
+          const monthAbbr = dateMatch[2];
+
+          // Конвертируем месяц в номер
+          const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                              'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+          const monthNum = monthNames.indexOf(monthAbbr) + 1;
+
+          // Определяем день недели (можно добавить логику)
+          const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+          let dayName = 'Day'; // По умолчанию
+
+          // Проверяем что такой даты еще нет
+          const exists = availableDates.some(existing =>
+            existing.day === day && existing.monthName === monthAbbr
+          );
+
+          if (!exists) {
+            availableDates.push({
+              day: day,
+              dayName: dayName,
+              monthName: monthAbbr,
+              monthNum: monthNum,
+              index: availableDates.length,
+              weekNumber: weekNumber,
+              dayIndex: d, // 0-6
+              colIndex: blockInfo.daysColumns[d],
+              blockInfo: blockInfo,
+              originalText: dateText
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`Error reading week ${weekNumber}:`, e);
+      continue;
+    }
+  }
+
+  // Сортируем даты в хронологическом порядке (старые → новые)
+  availableDates.sort((a, b) => {
+    // Сначала сравниваем недели
+    if (a.weekNumber !== b.weekNumber) {
+      return a.weekNumber - b.weekNumber; // WEEK 40 перед WEEK 41
+    }
+    // Внутри недели сортируем по индексу дня
+    return a.dayIndex - b.dayIndex;
+  });
+
+  // Обновляем индексы после сортировки
+  availableDates.forEach((date, index) => {
+    date.index = index;
+  });
+
+  return availableDates;
+}
+
+/************** HTML DIALOG **************/
+
+function createDateRangeDialog(availableDates) {
+  // Получаем текущую дату по Чикаго
+  const now = new Date();
+  const chicagoTime = Utilities.formatDate(now, CONFIG.timezone, 'yyyy-MM-dd');
+  const currentDay = parseInt(chicagoTime.split('-')[2]);
+  const currentMonth = parseInt(chicagoTime.split('-')[1]);
+
+  // Находим индекс сегодняшней даты
+  let todayIndex = availableDates.length - 1; // по умолчанию последняя
+  let yesterdayIndex = Math.max(0, todayIndex - 1); // по умолчанию предпоследняя
+
+  // Ищем реальную сегодняшнюю дату
+  for (let i = availableDates.length - 1; i >= 0; i--) {
+    const date = availableDates[i];
+    if (date.day === currentDay && date.monthNum === currentMonth) {
+      todayIndex = i;
+      yesterdayIndex = Math.max(0, i - 1);
+      break;
+    }
+    // Если текущая дата меньше или равна дню из списка, берем её
+    if (date.day <= currentDay && date.monthNum === currentMonth) {
+      todayIndex = i;
+      yesterdayIndex = Math.max(0, i - 1);
+      break;
+    }
+  }
+
+  const dateOptions = availableDates.map((d, index) =>
+    `<option value="${index}">${d.day}-${d.monthName} (WEEK ${d.weekNumber})</option>`
+  ).join('');
+
+  return `
+    <html>
+      <head>
+        <style>
+          * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+          }
+
+          body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 0;
+            background: transparent;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+
+          .container {
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 420px;
+            max-height: 400px;
+            animation: slideIn 0.3s ease-out;
+          }
+
+          @keyframes slideIn {
+            from {
+              opacity: 0;
+              transform: translateY(-20px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
+          }
+
+          .header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 18px;
+          }
+
+          .icon {
+            font-size: 24px;
+          }
+
+          h3 {
+            color: #2d3748;
+            font-size: 20px;
+            font-weight: 600;
+          }
+
+          .form-group {
+            margin-bottom: 14px;
+          }
+
+          label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+            font-weight: 600;
+            color: #4a5568;
+            font-size: 13px;
+          }
+
+          .badge {
+            background: #edf2f7;
+            color: #667eea;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+          }
+
+          select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #2d3748;
+            background: white;
+            transition: all 0.2s ease;
+            cursor: pointer;
+          }
+
+          select:hover {
+            border-color: #cbd5e0;
+          }
+
+          select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+          }
+
+          .buttons {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+          }
+
+          button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s ease;
+            flex: 1;
+          }
+
+          .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+          }
+
+          .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+          }
+
+          .btn-primary:active {
+            transform: translateY(0);
+          }
+
+          .btn-secondary {
+            background: white;
+            color: #718096;
+            border: 2px solid #e2e8f0;
+          }
+
+          .btn-secondary:hover {
+            background: #f7fafc;
+            border-color: #cbd5e0;
+          }
+
+          .info-text {
+            text-align: center;
+            color: #a0aec0;
+            font-size: 12px;
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px solid #e2e8f0;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <span class="icon">📅</span>
+            <h3>Select Date Range</h3>
+          </div>
+
+          <div class="form-group">
+            <label>
+              <span>Start Date</span>
+              <span class="badge" id="startWeek"></span>
+            </label>
+            <select id="startDate" onchange="updateWeekBadge()">
+              ${dateOptions}
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>
+              <span>End Date</span>
+              <span class="badge" id="endWeek"></span>
+            </label>
+            <select id="endDate" onchange="updateWeekBadge()">
+              ${dateOptions}
+            </select>
+          </div>
+
+          <div class="info-text">
+            Find drivers with RED READY status
+          </div>
+
+          <div class="buttons">
+            <button class="btn-secondary" onclick="cancel()">Cancel</button>
+            <button class="btn-primary" onclick="submit()">Create Report</button>
+          </div>
+        </div>
+
+        <script>
+          // Устанавливаем вчера и сегодня по умолчанию (на основе текущей даты по Чикаго)
+          const YESTERDAY_INDEX = ${yesterdayIndex};
+          const TODAY_INDEX = ${todayIndex};
+
+          window.onload = function() {
+            const startSelect = document.getElementById('startDate');
+            const endSelect = document.getElementById('endDate');
+
+            // Устанавливаем вчера как startDate
+            startSelect.value = YESTERDAY_INDEX;
+
+            // Устанавливаем сегодня как endDate
+            endSelect.value = TODAY_INDEX;
+
+            updateWeekBadge();
+          };
+
+          function updateWeekBadge() {
+            const startSelect = document.getElementById('startDate');
+            const endSelect = document.getElementById('endDate');
+
+            const startText = startSelect.options[startSelect.selectedIndex].text;
+            const endText = endSelect.options[endSelect.selectedIndex].text;
+
+            // Извлекаем номер недели из текста
+            const startWeekMatch = startText.match(/WEEK (\\d+)/);
+            const endWeekMatch = endText.match(/WEEK (\\d+)/);
+
+            if (startWeekMatch) {
+              document.getElementById('startWeek').textContent = 'Week ' + startWeekMatch[1];
+            }
+            if (endWeekMatch) {
+              document.getElementById('endWeek').textContent = 'Week ' + endWeekMatch[1];
+            }
+          }
+
+          function submit() {
+            const startIndex = document.getElementById('startDate').value;
+            const endIndex = document.getElementById('endDate').value;
+
+            if (parseInt(startIndex) > parseInt(endIndex)) {
+              alert('⚠️ Start date must be before end date!');
+              return;
+            }
+
+            // Отключаем кнопку чтобы нельзя было нажать дважды
+            const btn = event.target;
+            btn.disabled = true;
+
+            // Анимация точек "Processing..."
+            let dots = 0;
+            const animateInterval = setInterval(function() {
+              dots = (dots + 1) % 4;
+              btn.textContent = 'Processing' + '.'.repeat(dots);
+            }, 500);
+
+            const result = JSON.stringify({
+              startIndex: parseInt(startIndex),
+              endIndex: parseInt(endIndex)
+            });
+
+            // Вызываем обработку, закрываем диалог через 2 секунды
+            google.script.run.processSelectedDateRange(result);
+            setTimeout(function() {
+              clearInterval(animateInterval);
+              google.script.host.close();
+            }, 2000);
+          }
+
+          function cancel() {
+            google.script.host.close();
+          }
+        </script>
+      </body>
+    </html>
+  `;
+}
+
+/************** SEPARATOR MANAGEMENT **************/
+
+// Получить все колонки разделителей
+function getAllSeparatorColumns() {
+  const separators = [];
+
+  console.log('Getting separator columns...');
+
+  // Добавляем базовые разделители (с проверкой)
+  if (TABLE_STRUCTURE.separators) {
+    if (TABLE_STRUCTURE.separators.afterDrivers) {
+      separators.push(TABLE_STRUCTURE.separators.afterDrivers); // G
+    }
+    if (TABLE_STRUCTURE.separators.afterWeek34) {
+      separators.push(TABLE_STRUCTURE.separators.afterWeek34);  // L
+    }
+  }
+
+  // Добавляем разделители из каждого недельного блока
+  for (const weekKey in TABLE_STRUCTURE.weekBlocks) {
+    const block = TABLE_STRUCTURE.weekBlocks[weekKey];
+
+    console.log(`Processing ${weekKey}:`, {
+      separator: block.separator,
+      separator2: block.separator2,
+      separator3: block.separator3
+    });
+
+    if (block.separator) separators.push(block.separator);
+    if (block.separator2) separators.push(block.separator2);
+    if (block.separator3) separators.push(block.separator3);
+  }
+
+  console.log('Total separators found:', separators.length);
+  return separators;
+}
+
+// Зафиксировать размер и цвет разделителей
+function fixSeparators() {
+  const ss = SpreadsheetApp.getActive();
+  const teamSheets = getTeamSheets(ss);
+
+  console.log('=== Fix Separators Started ===');
+
+  if (teamSheets.length === 0) {
+    SpreadsheetApp.getUi().alert('Не найдено листов команд.');
+    return;
+  }
+
+  const separatorColumns = getAllSeparatorColumns();
+  console.log('Separator columns:', separatorColumns);
+
+  const separatorColor = '#434343';
+  const separatorWidth = 38; // пикселей
+
+  let fixedCount = 0;
+
+  for (const sheet of teamSheets) {
+    try {
+      const lastRow = sheet.getLastRow();
+
+      for (const colLetter of separatorColumns) {
+        console.log('Processing separator column:', colLetter);
+        if (!colLetter) {
+          console.error('Undefined separator column!');
+          continue;
+        }
+        const colIndex = colLetterToIndex(colLetter);
+
+        // Устанавливаем ширину колонки
+        sheet.setColumnWidth(colIndex, separatorWidth);
+
+        // Устанавливаем цвет фона для всей колонки
+        if (lastRow > 0) {
+          sheet.getRange(1, colIndex, lastRow, 1).setBackground(separatorColor);
+        }
+      }
+
+      fixedCount++;
+    } catch (e) {
+      console.error(`Ошибка для ${sheet.getName()}:`, e);
+    }
+  }
+
+  SpreadsheetApp.getUi().alert(`Разделители зафиксированы в ${fixedCount} листах.\nШирина: ${separatorWidth}px, Цвет: ${separatorColor}`);
+}
+
+/************** MENU **************/
+
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu('Dispatch NEW')
+      .addItem('🎯 READY Custom Date Range', 'buildReadyCustomDateRange')
+      .addSeparator()
+      .addItem('🔧 Fix Separators', 'fixSeparators')
+      .addSeparator()
+      .addItem('🧪 Test All Functions', 'testAllFunctions')
+      .addToUi();
+  } catch (e) {
+    console.error('Error in onOpen:', e);
+  }
+}
+
+// Тестовая функция для проверки всех функций
+function testAllFunctions() {
+  console.log('=== TESTING ALL FUNCTIONS ===\n');
+
+  // 1. colLetterToIndex
+  console.log('1. Testing colLetterToIndex:');
+  try {
+    console.log('  A =', colLetterToIndex('A'), '(expected: 1)');
+    console.log('  Z =', colLetterToIndex('Z'), '(expected: 26)');
+    console.log('  AA =', colLetterToIndex('AA'), '(expected: 27)');
+    console.log('  CG =', colLetterToIndex('CG'), '(expected: 85)');
+    console.log('  ✅ colLetterToIndex works');
+  } catch (e) {
+    console.error('  ❌ colLetterToIndex failed:', e);
+  }
+
+  // 2. colIndexToLetter
+  console.log('\n2. Testing colIndexToLetter:');
+  try {
+    console.log('  1 =', colIndexToLetter(1), '(expected: A)');
+    console.log('  26 =', colIndexToLetter(26), '(expected: Z)');
+    console.log('  27 =', colIndexToLetter(27), '(expected: AA)');
+    console.log('  ✅ colIndexToLetter works');
+  } catch (e) {
+    console.error('  ❌ colIndexToLetter failed:', e);
+  }
+
+  // 3. isRedColor
+  console.log('\n3. Testing isRedColor:');
+  try {
+    console.log('  #ff0000 =', isRedColor('#ff0000'), '(expected: true)');
+    console.log('  #00ff00 =', isRedColor('#00ff00'), '(expected: false)');
+    console.log('  #ff6666 =', isRedColor('#ff6666'), '(expected: true)');
+    console.log('  ✅ isRedColor works');
+  } catch (e) {
+    console.error('  ❌ isRedColor failed:', e);
+  }
+
+  // 4. getTeamSheets
+  console.log('\n4. Testing getTeamSheets:');
+  try {
+    const ss = SpreadsheetApp.getActive();
+    const sheets = getTeamSheets(ss);
+    console.log('  Found', sheets.length, 'team sheets');
+    sheets.forEach(s => console.log('    -', s.getName()));
+    console.log('  ✅ getTeamSheets works');
+  } catch (e) {
+    console.error('  ❌ getTeamSheets failed:', e);
+  }
+
+  // 5. getAvailableWeeks
+  console.log('\n5. Testing getAvailableWeeks:');
+  try {
+    const weeks = getAvailableWeeks();
+    console.log('  Available weeks:', weeks);
+    console.log('  ✅ getAvailableWeeks works');
+  } catch (e) {
+    console.error('  ❌ getAvailableWeeks failed:', e);
+  }
+
+  // 6. getCurrentAndPreviousWeeks
+  console.log('\n6. Testing getCurrentAndPreviousWeeks:');
+  try {
+    const weeks = getCurrentAndPreviousWeeks();
+    console.log('  Current & Previous weeks:', weeks);
+    console.log('  ✅ getCurrentAndPreviousWeeks works');
+  } catch (e) {
+    console.error('  ❌ getCurrentAndPreviousWeeks failed:', e);
+  }
+
+  // 7. getWeekBlockInfo
+  console.log('\n7. Testing getWeekBlockInfo:');
+  try {
+    const block40 = getWeekBlockInfo(40);
+    console.log('  Week 40:', block40 ? '✅ Found' : '❌ Not found');
+    if (block40) {
+      console.log('    day1Col:', block40.day1Col);
+      console.log('    weekGrossCol:', block40.weekGrossCol);
+    }
+
+    const block41 = getWeekBlockInfo(41);
+    console.log('  Week 41:', block41 ? '✅ Found' : '❌ Not found');
+    if (block41) {
+      console.log('    day1Col:', block41.day1Col);
+      console.log('    weekGrossCol:', block41.weekGrossCol);
+    }
+  } catch (e) {
+    console.error('  ❌ getWeekBlockInfo failed:', e);
+  }
+
+  // 8. parseDateFromHeader
+  console.log('\n8. Testing parseDateFromHeader:');
+  try {
+    const date1 = parseDateFromHeader('29-Sep');
+    console.log('  "29-Sep" =>', date1);
+
+    const date2 = parseDateFromHeader('5-Oct');
+    console.log('  "5-Oct" =>', date2);
+    console.log('  ✅ parseDateFromHeader works');
+  } catch (e) {
+    console.error('  ❌ parseDateFromHeader failed:', e);
+  }
+
+  // 9. findAvailableDates
+  console.log('\n9. Testing findAvailableDates:');
+  try {
+    const ss = SpreadsheetApp.getActive();
+    const dates = findAvailableDates(ss);
+    console.log('  Found', dates.length, 'dates');
+    if (dates.length > 0) {
+      console.log('  First date:', dates[0]);
+      console.log('  Last date:', dates[dates.length - 1]);
+    }
+    console.log('  ✅ findAvailableDates works');
+  } catch (e) {
+    console.error('  ❌ findAvailableDates failed:', e);
+  }
+
+  console.log('\n=== TEST COMPLETE ===');
+}
+
+/************** MAIN FUNCTION **************/
+
+function buildReadyCustomDateRange() {
+  const ss = SpreadsheetApp.getActive();
+  const ui = SpreadsheetApp.getUi();
+
+  console.log('=== Starting buildReadyCustomDateRange ===');
+
+  // Находим все доступные даты
+  const availableDates = findAvailableDates(ss);
+
+  console.log('Found dates:', availableDates.length);
+
+  if (availableDates.length === 0) {
+    ui.alert('Не найдено доступных дат. Проверьте что заголовки содержат даты.');
+    return;
+  }
+
+  // Сохраняем даты для использования в processSelectedDateRange
+  PropertiesService.getScriptProperties().setProperty('availableDates', JSON.stringify(availableDates));
+
+  // Показываем диалог выбора
+  const dateRangeDialog = createDateRangeDialog(availableDates);
+  const htmlOutput = HtmlService.createHtmlOutput(dateRangeDialog)
+    .setWidth(420)
+    .setHeight(340);
+
+  ui.showModalDialog(htmlOutput, 'Select Date Range for READY');
+
+  // Функция ЗАКАНЧИВАЕТСЯ здесь - ждем пока пользователь нажмет кнопку
+}
+
+// Эта функция вызывается ТОЛЬКО когда пользователь нажимает "Create Report" в диалоге
+function processSelectedDateRange(rangeDataJson) {
+  const ss = SpreadsheetApp.getActive();
+
+  console.log('=== Processing selected date range ===');
+
+  // Получаем сохраненные даты
+  const availableDatesJson = PropertiesService.getScriptProperties().getProperty('availableDates');
+  const availableDates = JSON.parse(availableDatesJson);
+
+  const rangeData = JSON.parse(rangeDataJson);
+  const startDateInfo = availableDates[rangeData.startIndex];
+  const endDateInfo = availableDates[rangeData.endIndex];
+
+  // Очищаем properties
+  PropertiesService.getScriptProperties().deleteProperty('availableDates');
+
+  // Показываем toast - пользователь уже выбрал даты!
+  ss.toast(`Searching for drivers with READY...`, '⏳ Processing', 10);
+
+  // Создаём отчёт (БЕЗ timestamp)
+  generateReadyReport(ss, availableDates, rangeData, startDateInfo, endDateInfo);
+}
+
+/************** REPORT GENERATION **************/
+
+function generateReadyReport(spreadsheet, availableDates, rangeData, startDateInfo, endDateInfo) {
+  const outName = `READY ${startDateInfo.day}-${startDateInfo.monthName} to ${endDateInfo.day}-${endDateInfo.monthName}`;
+
+  spreadsheet.toast('Creating report sheet...', '⏳ Step 1/3', 3);
+
+  let outSheet = spreadsheet.getSheetByName(outName);
+  if (outSheet) {
+    outSheet.clear();
+  } else {
+    outSheet = spreadsheet.insertSheet(outName);
+  }
+
+  // Получаем целевые даты
+  const targetDates = availableDates.slice(rangeData.startIndex, rangeData.endIndex + 1);
+
+  if (targetDates.length === 0) {
+    outSheet.getRange('A1').setValue('No dates in selected range.');
+    spreadsheet.toast('❌ No dates', 'Error', 3);
+    return;
+  }
+
+  spreadsheet.toast(`Searching READY in ${targetDates.length} dates...`, '⏳ Step 2/3', 5);
+
+  // Собираем кандидатов (водителей с RED READY на всех выбранных датах)
+  const candidates = findReadyCandidates(spreadsheet, targetDates);
+
+  if (candidates.length === 0) {
+    outSheet.getRange('A1').setValue('No drivers with RED READY found on all selected dates.');
+    spreadsheet.toast('❌ No drivers found', 'Done', 3);
+    return;
+  }
+
+  spreadsheet.toast(`Found ${candidates.length} drivers. Creating report...`, '⏳ Step 3/3', 5);
+
+  // Записываем отчёт
+  writeReadyReport(outSheet, candidates, targetDates, spreadsheet);
+}
+
+function findReadyCandidates(spreadsheet, targetDates) {
+  const candidates = [];
+  const teamSheets = getTeamSheets(spreadsheet);
+
+  // Показываем прогресс по командам
+  let processedTeams = 0;
+
+  for (const sheet of teamSheets) {
+    const lastRow = sheet.getLastRow();
+    if (lastRow < CONFIG.dataStartRow) continue;
+
+    const numRows = lastRow - CONFIG.dataStartRow + 1;
+
+    // Группируем даты по неделям для оптимизации чтения
+    const weekGroups = new Map();
+    for (const date of targetDates) {
+      if (!weekGroups.has(date.weekNumber)) {
+        weekGroups.set(date.weekNumber, []);
+      }
+      weekGroups.get(date.weekNumber).push(date);
+    }
+
+    // Читаем данные для каждой недели
+    const weekData = new Map();
+    for (const [weekNumber, dates] of weekGroups) {
+      const blockInfo = dates[0].blockInfo;
+      try {
+        const vals = sheet.getRange(CONFIG.dataStartRow, blockInfo.day1Col, numRows, 7).getValues();
+        const bgs = sheet.getRange(CONFIG.dataStartRow, blockInfo.day1Col, numRows, 7).getBackgrounds();
+        weekData.set(weekNumber, { vals, bgs, blockInfo });
+      } catch (e) {
+        console.error(`Error reading week ${weekNumber}:`, e);
+      }
+    }
+
+    // Проверяем каждого водителя
+    for (let i = 0; i < numRows; i++) {
+      let allDaysReady = true;
+
+      // Проверяем что ВСЕ целевые даты = RED READY
+      for (const date of targetDates) {
+        const data = weekData.get(date.weekNumber);
+        if (!data) {
+          allDaysReady = false;
+          break;
+        }
+
+        const dayVal = String(data.vals[i][date.dayIndex] || '').trim().toLowerCase();
+        const dayBg = String(data.bgs[i][date.dayIndex] || '');
+
+        if (dayVal !== 'ready' || !isRedColor(dayBg)) {
+          allDaysReady = false;
+          break;
+        }
+      }
+
+      if (allDaysReady) {
+        candidates.push({
+          sheet: sheet,
+          row: CONFIG.dataStartRow + i,
+          targetDates: targetDates
+        });
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function writeReadyReport(outSheet, candidates, targetDates, spreadsheet) {
+  const firstSheet = candidates[0].sheet;
+  const lastDate = targetDates[targetDates.length - 1];
+
+  // Находим все уникальные недели из выбранных дат
+  const uniqueWeeks = [...new Set(targetDates.map(d => d.weekNumber))].sort((a, b) => a - b);
+
+  const totalCols = 2 + targetDates.length + uniqueWeeks.length + 1; // E:F + dates + WEEK GROSS'ы + NOTES
+  const totalRows = candidates.length + 1; // +1 для заголовка
+
+  // === ШАПКА - копируем всё одним батчем ===
+  let outCol = 1;
+
+  // E:F (Dispatcher, Driver)
+  firstSheet.getRange(1, colLetterToIndex(TABLE_STRUCTURE.base.dispatcher), 1, 2)
+            .copyTo(outSheet.getRange(1, outCol, 1, 2));
+  outCol += 2;
+
+  // Заголовки дат
+  for (const date of targetDates) {
+    firstSheet.getRange(1, date.colIndex, 1, 1)
+              .copyTo(outSheet.getRange(1, outCol, 1, 1));
+    outCol++;
+  }
+
+  // WEEK GROSS для каждой уникальной недели
+  for (const weekNum of uniqueWeeks) {
+    const weekBlockInfo = getWeekBlockInfo(weekNum);
+    if (weekBlockInfo) {
+      firstSheet.getRange(1, weekBlockInfo.weekGrossCol, 1, 1)
+                .copyTo(outSheet.getRange(1, outCol, 1, 1));
+      outCol++;
+    }
+  }
+
+  // NOTES (из последней даты)
+  firstSheet.getRange(1, lastDate.blockInfo.notesCol, 1, 1)
+            .copyTo(outSheet.getRange(1, outCol, 1, 1));
+
+  // === ДАННЫЕ - собираем все значения и форматы в массивы ===
+  const allValues = [];
+  const allBackgrounds = [];
+  const allFontColors = [];
+  const allFontWeights = [];
+  const allNumberFormats = [];
+
+  // Группируем по листам для батч-чтения
+  const sheetGroups = new Map();
+  for (const candidate of candidates) {
+    const sheetName = candidate.sheet.getName();
+    if (!sheetGroups.has(sheetName)) {
+      sheetGroups.set(sheetName, []);
+    }
+    sheetGroups.get(sheetName).push(candidate);
+  }
+
+  // Обрабатываем каждый лист отдельно
+  for (const [sheetName, groupCandidates] of sheetGroups) {
+    const sheet = groupCandidates[0].sheet;
+
+    // Определяем колонки один раз для всех кандидатов
+    const colsToRead = [];
+
+    // E:F (Dispatcher, Driver)
+    colsToRead.push(colLetterToIndex(TABLE_STRUCTURE.base.dispatcher));
+    colsToRead.push(colLetterToIndex(TABLE_STRUCTURE.base.driver));
+
+    // Все даты
+    for (const date of targetDates) {
+      colsToRead.push(date.colIndex);
+    }
+
+    // WEEK GROSS для каждой уникальной недели
+    const weekGrossColumns = [];
+    for (const weekNum of uniqueWeeks) {
+      const weekBlockInfo = getWeekBlockInfo(weekNum);
+      if (weekBlockInfo) {
+        colsToRead.push(weekBlockInfo.weekGrossCol);
+        weekGrossColumns.push(weekBlockInfo.weekGrossCol);
+      }
+    }
+
+    // NOTES
+    colsToRead.push(lastDate.blockInfo.notesCol);
+
+    // Находим минимальную и максимальную колонки
+    const minCol = Math.min(...colsToRead);
+    const maxCol = Math.max(...colsToRead);
+    const colCount = maxCol - minCol + 1;
+
+    // Собираем все строки для батч-чтения
+    const rows = groupCandidates.map(c => c.row);
+    const minRow = Math.min(...rows);
+    const maxRow = Math.max(...rows);
+    const rowCount = maxRow - minRow + 1;
+
+    // ЧИТАЕМ ВСЕ ДАННЫЕ ОДНИМ ОГРОМНЫМ БАТЧЕМ для всех водителей из этого листа
+    const bigRange = sheet.getRange(minRow, minCol, rowCount, colCount);
+    const allVals = bigRange.getValues();
+    const allBgs = bigRange.getBackgrounds();
+    const allColors = bigRange.getFontColors();
+    const allWeights = bigRange.getFontWeights();
+    const allDisplayVals = bigRange.getDisplayValues();
+    const allFormats = bigRange.getNumberFormats();
+
+    // Обрабатываем каждого кандидата
+    for (const candidate of groupCandidates) {
+      const row = candidate.row;
+      const rowOffset = row - minRow;
+
+      // Извлекаем данные для этой строки
+      const rowVals = allVals[rowOffset];
+      const rowBgs = allBgs[rowOffset];
+      const rowColors = allColors[rowOffset];
+      const rowWeights = allWeights[rowOffset];
+      const rowDisplayVals = allDisplayVals[rowOffset];
+      const rowFormats = allFormats[rowOffset];
+
+      // Извлекаем нужные значения по индексам
+      const rowValues = [];
+      const rowBackgrounds = [];
+      const rowFontColors = [];
+      const rowFontWeights = [];
+      const rowNumberFormats = [];
+
+      for (const col of colsToRead) {
+        const offset = col - minCol;
+
+        // Для WEEK GROSS колонок используем displayValue и конвертируем в число
+        if (weekGrossColumns.includes(col)) {
+          const weekGrossValue = rowDisplayVals[offset];
+          // Удаляем $ и запятые, затем парсим
+          const cleanValue = String(weekGrossValue).replace(/[$,]/g, '').trim();
+          const weekGrossNumber = parseFloat(cleanValue) || 0;
+          rowValues.push(weekGrossNumber);
+        } else {
+          rowValues.push(rowVals[offset]);
+        }
+
+        rowBackgrounds.push(rowBgs[offset]);
+        rowFontColors.push(rowColors[offset]);
+        rowFontWeights.push(rowWeights[offset]);
+        rowNumberFormats.push(rowFormats[offset]);
+      }
+
+      allValues.push(rowValues);
+      allBackgrounds.push(rowBackgrounds);
+      allFontColors.push(rowFontColors);
+      allFontWeights.push(rowFontWeights);
+      allNumberFormats.push(rowNumberFormats);
+    }
+  }
+
+  // === ЗАПИСЫВАЕМ ВСЁ ОДНИМ БАТЧЕМ ===
+  if (allValues.length > 0) {
+    const dataRange = outSheet.getRange(2, 1, allValues.length, totalCols);
+    dataRange.setValues(allValues);
+    dataRange.setBackgrounds(allBackgrounds);
+    dataRange.setFontColors(allFontColors);
+    dataRange.setFontWeights(allFontWeights);
+    dataRange.setNumberFormats(allNumberFormats);
+  }
+
+  // Применяем всё форматирование одним большим блоком
+  const fullRange = outSheet.getRange(1, 1, totalRows, totalCols);
+
+  fullRange.setBorder(
+    true, true, true, true, true, true,
+    'black',
+    SpreadsheetApp.BorderStyle.SOLID_MEDIUM
+  )
+  .setFontWeight('bold')
+  .setHorizontalAlignment('center');
+
+  // Белый цвет текста для заголовков
+  outSheet.getRange(1, 1, 1, totalCols).setFontColor('white');
+
+  // Автоширина для каждой колонки + 0.7см padding
+  for (let c = 1; c <= totalCols; c++) {
+    outSheet.autoResizeColumn(c);
+    const currentWidth = outSheet.getColumnWidth(c);
+    outSheet.setColumnWidth(c, currentWidth + 26); // +0.7см ≈ 26 пикселей
+  }
+
+  // Показываем успешный результат
+  const ss = SpreadsheetApp.getActive();
+  ss.toast(`✅ Found ${candidates.length} drivers`, 'Done!', 5);
+
+  SpreadsheetApp.getUi().alert(`✅ Report Created!\n\nDrivers found: ${candidates.length}\nDate range: ${targetDates[0].day}-${targetDates[0].monthName} to ${lastDate.day}-${lastDate.monthName}`);
+}
