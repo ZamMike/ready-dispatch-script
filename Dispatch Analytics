@@ -16,7 +16,7 @@ const BLOCK_STEP = 12;   // AK..AS, AW..BE, BI..BQ, ...
 const DAYS_IN_WEEK = 7;  // AK..AR (7 дней)
 
 /************** UNDERGROSS CONFIG **************/
-const UG_DATA_START_ROW = 3;
+const UG_DATA_START_ROW = 2;
 const BASE_RANK_COLS = ['H','I','J','K','U','AG']; // базовая история
 const WEEK_BLOCK_WIDTH = 12;                        // шаг блоков
 const WEEK_DAYS_LEN = 7;                            // AK..AR
